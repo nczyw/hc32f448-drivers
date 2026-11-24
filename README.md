@@ -144,6 +144,7 @@ AES_Final_Ex(&ctx, cipher + out, &out); /* CTR Final out=0,空操作 */
 ```
 
 > **安全须知**:
+>
 > - CBC 解密时密文必须是 16B 整倍数,否则 `AES_Final_Ex` 返回 `LL_ERR_INVD_PARAM`.
 > - PKCS#7 在解密 Final 中做严格校验,padding 字节必须等于其值.
 > - CTR 模式下同一 `(key, nonce)` 绝不能重复使用同一 counter 值,否则 keystream 会重复导致明文泄露.
@@ -154,10 +155,10 @@ AES_Final_Ex(&ctx, cipher + out, &out); /* CTR Final out=0,空操作 */
 所有扩展 API 统一使用 `hc32_ll_def.h` 中的返回码:
 
 | 返回值 | 含义 |
-|---|---|
+| --- | --- |
 | `LL_OK`           (0) | 成功 |
-| `LL_ERR_INVD_PARAM`    | 指针 NULL、参数越界、状态机非法 |
-| `LL_ERR_TIMEOUT`       | 硬件 START 在超时窗口内未清零 |
+| `LL_ERR_INVD_PARAM` | 指针 NULL、参数越界、状态机非法 |
+| `LL_ERR_TIMEOUT` | 硬件 START 在超时窗口内未清零 |
 
 ### 多任务安全示例
 

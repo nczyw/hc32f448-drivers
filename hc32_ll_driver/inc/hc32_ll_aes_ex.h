@@ -160,10 +160,19 @@ int32_t AES_Init_Ex(stc_aes_ctx_t *pCtx,
  * @brief  Feed arbitrary-length data into an AES streaming context and write
  *         out every complete block's worth of ciphertext / plaintext.
  *
- *         For all modes, output bytes are only produced once a full block of
- *         input has been consumed; the remainder stays in pCtx until Final.
- *         CTR is special: its "blocks" are conceptual keystream generation
- *         units and can be streamed out in arbitrarily small slices.
+ *         Encrypt (ECB/CBC): every full 16-byte input block is encrypted and
+ *         written immediately. At most 15 trailing bytes stay buffered in pCtx
+ *         until Final.
+ *
+ *         Decrypt (ECB/CBC): the **last complete ciphertext block is retained**
+ *         inside pCtx. Output therefore lags input by one block; the retained
+ *         block is only decrypted in Final, where PKCS#7 padding is verified.
+ *         Callers just feed ciphertext; no special handling of the final block
+ *         is required.
+ *
+ *         CTR: keystream blocks are generated on demand and XORed per byte, so
+ *         output length always equals input length and no block alignment is
+ *         needed.
  *
  * @param  [in,out] pCtx        AES context (must have been Init_Ex'd).
  * @param  [in]     pIn         Input data (plaintext for ENCRYPT, ciphertext
@@ -186,31 +195,35 @@ int32_t AES_Update_Ex(stc_aes_ctx_t *pCtx,
                       uint8_t       *pOut, uint32_t *pu32OutLen);
 
 /**
- * @brief  Finalize an AES streaming context.
+ * @brief  Finalize an AES streaming context. Uniform 3-parameter API for all
+ *         modes and both directions.
  *
- *         - ECB/CBC **Encrypt** : pads the remaining partial block with PKCS#7
- *           and writes out the final 1~2 ciphertext blocks. Output bytes are
- *           guaranteed to be a multiple of 16.
- *         - ECB/CBC **Decrypt** : the caller MUST have fed a multiple of 16
- *           bytes (PKCS#7 padding is checked here and stripped). If the final
- *           block after decryption does not contain valid PKCS#7 padding, the
- *           function returns LL_ERR_INVD_PARAM.
- *         - CTR **Encrypt/Decrypt** : if any residual keystream has not yet
- *           been consumed, it is applied to the final buffer and written out.
- *           No padding is produced.
+ *         - ECB/CBC **Encrypt** : pads the buffered remainder with PKCS#7 and
+ *           writes exactly one 16-byte ciphertext block (a full 0x10 block when
+ *           the plaintext length was already a multiple of 16).
+ *         - ECB/CBC **Decrypt** : decrypts the last ciphertext block retained by
+ *           Update, verifies and strips PKCS#7 padding, and writes the remaining
+ *           plaintext (0 ~ 15 bytes). If the total ciphertext length was not a
+ *           non-zero multiple of 16, or the padding is invalid, returns
+ *           LL_ERR_INVD_PARAM.
+ *         - CTR **Encrypt/Decrypt** : nothing left to do (Update emits output
+ *           byte-for-byte), writes 0 bytes. No padding is used.
  *
  *         After Final returns successfully, the key stored in pCtx is zeroed
  *         (best-effort), and pCtx transitions to state=2 (cannot be reused).
  *
  * @param  [in,out] pCtx        AES context.
- * @param  [out]    pOut        Output buffer (for CBC/CTR worst-case 16 B,
- *                              for ECB worst-case 32 B due to PKCS#7 overflow).
- * @param  [out]    pu32OutLen  Number of bytes written to pOut.
+ * @param  [out]    pOut        Output buffer, at least 16 bytes.
+ * @param  [out]    pu32OutLen  Number of bytes written to pOut
+ *                              (ECB/CBC encrypt: always 16;
+ *                               ECB/CBC decrypt: 0 ~ 15;
+ *                               CTR: 0).
  *
  * @retval int32_t:
  *           - LL_OK:               Finalized successfully
  *           - LL_ERR_INVD_PARAM:   pCtx / pOut / pu32OutLen NULL,
- *                                  state != 1, PKCS#7 padding invalid on decrypt
+ *                                  state != 1, ciphertext length invalid or
+ *                                  PKCS#7 padding invalid on decrypt
  *           - LL_ERR_TIMEOUT:      Hardware operation timed out
  */
 int32_t AES_Final_Ex(stc_aes_ctx_t *pCtx,

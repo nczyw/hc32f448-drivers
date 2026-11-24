@@ -94,7 +94,7 @@ AES_Init_Ex(&ctx,
             NULL);                      /* ECB 不传 IV */
 
 AES_Update_Ex(&ctx, plaintext, len, cipher, &out_len); /* 未满 16B 会暂存 */
-AES_Final_Ex(&ctx, cipher + out_len, &out_len);         /* 自动 PKCS#7 补 1~2 块 */
+AES_Final_Ex(&ctx, cipher + out_len, &out_len);         /* 自动 PKCS#7 补齐 1 块 */
 ```
 
 **CBC 加密(带 IV,安全):**
@@ -112,18 +112,21 @@ AES_Update_Ex(&ctx, chunk2, len2, cipher + out1,       &out2);
 AES_Final_Ex(&ctx,                 cipher + out1 + out2, &out3);
 ```
 
-**CBC 解密:**
+**CBC 解密(`Final` 同样是 3 参数,最后一个密文块由 `Update` 自动扣留):**
 
 ```c
-/* 解密 Update 必须喂完整 16B 块,Final 喂最后一个完整块 */
 AES_Init_Ex(&ctx, AES_EX_MODE_CBC, AES_EX_DIR_DECRYPT,
             key, AES_KEY_SIZE_16BYTE, iv);  /* IV 和加密时相同 */
 
-AES_Update_Ex(&ctx, cipher + off, 16, plain + out_off, &out);
-/* ...循环喂完整 16B 块... */
+/* 密文可以任意分段喂,不必自己留最后一块,输出会延迟一块 */
+AES_Update_Ex(&ctx, cipher + off, len, plain + out_off, &out);
+/* ...可以继续多次 Update... */
 
-AES_Final_Ex(&ctx, cipher + off, plain + out_off, &out);  /* 内部验证并剥离 PKCS#7 */
+/* Final 内部解密被扣留的最后一块,校验并剥离 PKCS#7 */
+AES_Final_Ex(&ctx, plain + out_off, &out);
 ```
+
+> 解密时 `Update` 的输出比输入滞后一个 16B 块(因为最后一块可能是带 padding 的块,只能在 Final 校验),这是流式解密的正常行为.
 
 **CTR(流密码,不需要 padding):**
 

@@ -338,13 +338,16 @@ static int32_t AES_Update_ECB_Dec(stc_aes_ctx_t *pCtx,
     uint32_t out_off = 0U;
 
     for (uint32_t i = 0U; i < u32InLen; i++) {
-        pCtx->buffer[pCtx->buffer_len++] = pIn[i];
+        /* A complete ciphertext block is being held back because it might be
+           the last one: PKCS#7 padding can only be verified in Final. The
+           arrival of another byte proves it is not the last block, so flush it. */
         if (pCtx->buffer_len == AES_EX_BLOCK_SIZE) {
             ret = AES_EX_RunBlockDec(pCtx->buffer, &pOut[out_off]);
             if (ret != LL_OK) return ret;
             out_off += AES_EX_BLOCK_SIZE;
             pCtx->buffer_len = 0U;
         }
+        pCtx->buffer[pCtx->buffer_len++] = pIn[i];
     }
     *pu32OutLen = out_off;
     return LL_OK;
@@ -387,7 +390,8 @@ static int32_t AES_Update_CBC_Dec(stc_aes_ctx_t *pCtx,
     uint8_t chainCopy[AES_EX_BLOCK_SIZE];
 
     for (uint32_t i = 0U; i < u32InLen; i++) {
-        pCtx->buffer[pCtx->buffer_len++] = pIn[i];
+        /* Hold back the last complete ciphertext block: it may carry the
+           PKCS#7 padding which can only be checked in Final. */
         if (pCtx->buffer_len == AES_EX_BLOCK_SIZE) {
             /* Remember this ciphertext block BEFORE decrypting it */
             AES_EX_MemCopy(chainCopy, pCtx->buffer, AES_EX_BLOCK_SIZE);
@@ -403,6 +407,7 @@ static int32_t AES_Update_CBC_Dec(stc_aes_ctx_t *pCtx,
             out_off += AES_EX_BLOCK_SIZE;
             pCtx->buffer_len = 0U;
         }
+        pCtx->buffer[pCtx->buffer_len++] = pIn[i];
     }
     *pu32OutLen = out_off;
     return LL_OK;
@@ -466,17 +471,18 @@ int32_t AES_Update_Ex(stc_aes_ctx_t *pCtx,
 
 /* ---------- Final helpers ---------- */
 
-/** ECB / CBC encrypt final: PKCS#7 pad the partial block and emit 1 or 2 blocks. */
+/** ECB / CBC encrypt final: PKCS#7 pad the partial block and emit one block.
+ *  When buffer_len == 0 the pad value is 16, so the single emitted block is a
+ *  full block of 0x10 — that is exactly what PKCS#7 requires, no second block. */
 static int32_t AES_Final_BlockEnc(stc_aes_ctx_t *pCtx,
                                    uint8_t *pOut, uint32_t *pu32OutLen)
 {
     int32_t ret;
-    uint32_t out_off = 0U;
     uint8_t pad, tmp[AES_EX_BLOCK_SIZE];
 
     pad = (uint8_t)(AES_EX_BLOCK_SIZE - pCtx->buffer_len);
 
-    /* first block = partial data + PKCS#7 pad */
+    /* block = partial data + PKCS#7 pad */
     for (uint8_t i = 0U; i < AES_EX_BLOCK_SIZE; i++) {
         tmp[i] = (i < pCtx->buffer_len) ? pCtx->buffer[i] : pad;
     }
@@ -485,24 +491,10 @@ static int32_t AES_Final_BlockEnc(stc_aes_ctx_t *pCtx,
         AES_EX_XorBlocks(tmp, pCtx->iv_or_ctr, tmp);
     }
 
-    ret = AES_EX_RunBlockEnc(tmp, &pOut[out_off]);
+    ret = AES_EX_RunBlockEnc(tmp, pOut);
     if (ret != LL_OK) return ret;
-    out_off += AES_EX_BLOCK_SIZE;
 
-    /* If pad == 16, we just emitted a full pad block — standard PKCS#7 requires
-       a *second* full padding block to signal "the last plaintext byte was already
-       in a block and we need a marker block". */
-    if (pad == AES_EX_BLOCK_SIZE) {
-        AES_EX_MemSet(tmp, AES_EX_BLOCK_SIZE, AES_EX_BLOCK_SIZE);
-        if (pCtx->mode == AES_EX_MODE_CBC) {
-            AES_EX_XorBlocks(tmp, &pOut[out_off - AES_EX_BLOCK_SIZE], tmp);
-        }
-        ret = AES_EX_RunBlockEnc(tmp, &pOut[out_off]);
-        if (ret != LL_OK) return ret;
-        out_off += AES_EX_BLOCK_SIZE;
-    }
-
-    *pu32OutLen = out_off;
+    *pu32OutLen = AES_EX_BLOCK_SIZE;
     return LL_OK;
 }
 
@@ -555,8 +547,9 @@ int32_t AES_Final_Ex(stc_aes_ctx_t *pCtx, uint8_t *pOut, uint32_t *pu32OutLen)
             if (pCtx->dir == AES_EX_DIR_ENCRYPT) {
                 ret = AES_Final_BlockEnc(pCtx, pOut, &out_len);
             } else {
-                /* Decrypt: MUST have exactly one final block buffered,
-                   and Update_Ex must have been feeding multiples of 16 B. */
+                /* Decrypt: Update holds back exactly the last ciphertext block.
+                   A full 16-byte block here means the ciphertext was a non-zero
+                   multiple of 16 and the retained block carries the PKCS#7 pad. */
                 if (pCtx->buffer_len != AES_EX_BLOCK_SIZE) {
                     /* Protocol violation: ciphertext is not a multiple of 16 B. */
                     ret = LL_ERR_INVD_PARAM;
